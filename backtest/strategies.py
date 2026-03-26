@@ -343,3 +343,176 @@ def ema_adx_scaled_mean_reversion(
     plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
 
     return plan
+
+def prior_session_breakout(
+    df: pd.DataFrame,
+    high_col: str = "prev_session_high",
+    low_col: str = "prev_session_low",
+    breakout_buffer: float = 0.0003,
+    volume_col: Optional[str] = "rel_volume_20",
+    volume_min: Optional[float] = None,
+    stop_loss_pct: float = 0.0018,
+    take_profit_pct: float = 0.0050,
+    max_hold_bars: int = 1200,
+    size: float = 1.0,
+    ts_col: Optional[str] = None,
+    symbol_col: Optional[str] = None,
+) -> pd.DataFrame:
+    out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
+    plan = _empty_plan(out)
+
+    if high_col not in plan.columns or low_col not in plan.columns:
+        raise ValueError("Missing previous session level columns.")
+
+    long_entry = out["close"] >= out[high_col] * (1.0 + breakout_buffer)
+    short_entry = out["close"] <= out[low_col] * (1.0 - breakout_buffer)
+
+    if volume_col is not None and volume_col in out.columns and volume_min is not None:
+        vol_ok = out[volume_col] >= volume_min
+        long_entry = long_entry & vol_ok
+        short_entry = short_entry & vol_ok
+
+    plan.loc[long_entry, "entry_signal"] = 1
+    plan.loc[short_entry, "entry_signal"] = -1
+
+    entry_mask = long_entry | short_entry
+    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
+    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
+    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+    plan.loc[entry_mask, "size"] = size
+
+    return plan
+
+
+def prior_session_failed_breakout(
+    df: pd.DataFrame,
+    high_col: str = "prev_session_high",
+    low_col: str = "prev_session_low",
+    sweep_buffer: float = 0.0002,
+    volume_col: Optional[str] = "rel_volume_20",
+    volume_min: Optional[float] = None,
+    stop_loss_pct: float = 0.0015,
+    take_profit_pct: float = 0.0045,
+    max_hold_bars: int = 900,
+    size: float = 1.0,
+    ts_col: Optional[str] = None,
+    symbol_col: Optional[str] = None,
+) -> pd.DataFrame:
+    out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
+    plan = _empty_plan(out)
+
+    if high_col not in out.columns or low_col not in out.columns:
+        raise ValueError("Missing previous session level columns.")
+
+    short_entry = (
+        (out["high"] >= out[high_col] * (1.0 + sweep_buffer))
+        & (out["close"] < out[high_col])
+    )
+
+    long_entry = (
+        (out["low"] <= out[low_col] * (1.0 - sweep_buffer))
+        & (out["close"] > out[low_col])
+    )
+
+    if volume_col is not None and volume_col in out.columns and volume_min is not None:
+        vol_ok = out[volume_col] >= volume_min
+        long_entry = long_entry & vol_ok
+        short_entry = short_entry & vol_ok
+
+    plan.loc[long_entry, "entry_signal"] = 1
+    plan.loc[short_entry, "entry_signal"] = -1
+
+    entry_mask = long_entry | short_entry
+    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
+    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
+    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+    plan.loc[entry_mask, "size"] = size
+
+    return plan
+
+
+def opening_range_breakout(
+    df: pd.DataFrame,
+    high_col: str = "opening_range_high_5m",
+    low_col: str = "opening_range_low_5m",
+    breakout_buffer: float = 0.0002,
+    volume_col: Optional[str] = "rel_volume_20",
+    volume_min: Optional[float] = None,
+    stop_loss_pct: float = 0.0018,
+    take_profit_pct: float = 0.0050,
+    max_hold_bars: int = 1200,
+    size: float = 1.0,
+    ts_col: Optional[str] = None,
+    symbol_col: Optional[str] = None,
+) -> pd.DataFrame:
+    out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
+    plan = _empty_plan(out)
+
+    if high_col not in out.columns or low_col not in out.columns:
+        raise ValueError("Missing opening range columns.")
+
+    long_entry = out["close"] >= out[high_col] * (1.0 + breakout_buffer)
+    short_entry = out["close"] <= out[low_col] * (1.0 - breakout_buffer)
+
+    if volume_col is not None and volume_col in out.columns and volume_min is not None:
+        vol_ok = out[volume_col] >= volume_min
+        long_entry = long_entry & vol_ok
+        short_entry = short_entry & vol_ok
+
+    plan.loc[long_entry, "entry_signal"] = 1
+    plan.loc[short_entry, "entry_signal"] = -1
+
+    entry_mask = long_entry | short_entry
+    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
+    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
+    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+    plan.loc[entry_mask, "size"] = size
+
+    return plan
+
+
+def rolling_range_fade(
+    df: pd.DataFrame,
+    high_col: str = "rolling_high_60m",
+    low_col: str = "rolling_low_60m",
+    sweep_buffer: float = 0.0002,
+    volume_col: Optional[str] = "rel_volume_20",
+    volume_max: Optional[float] = None,
+    stop_loss_pct: float = 0.0015,
+    take_profit_pct: float = 0.0045,
+    max_hold_bars: int = 900,
+    size: float = 1.0,
+    ts_col: Optional[str] = None,
+    symbol_col: Optional[str] = None,
+) -> pd.DataFrame:
+    out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
+    plan = _empty_plan(out)
+
+    if high_col not in out.columns or low_col not in out.columns:
+        raise ValueError("Missing rolling range columns.")
+
+    short_entry = (
+        (out["high"] >= out[high_col] * (1.0 + sweep_buffer))
+        & (out["close"] < out[high_col])
+    )
+
+    long_entry = (
+        (out["low"] <= out[low_col] * (1.0 - sweep_buffer))
+        & (out["close"] > out[low_col])
+    )
+
+    if volume_col is not None and volume_col in out.columns and volume_max is not None:
+        vol_ok = out[volume_col] <= volume_max
+        long_entry = long_entry & vol_ok
+        short_entry = short_entry & vol_ok
+
+    plan.loc[long_entry, "entry_signal"] = 1
+    plan.loc[short_entry, "entry_signal"] = -1
+
+    entry_mask = long_entry | short_entry
+    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
+    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
+    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+    plan.loc[entry_mask, "size"] = size
+
+    return plan
