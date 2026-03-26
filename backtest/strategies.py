@@ -306,3 +306,40 @@ def ema_adx_session_mean_reversion(
     plan.loc[entry_mask, "size"] = size
 
     return plan
+
+def ema_adx_scaled_mean_reversion(
+    df: pd.DataFrame,
+    z_col: str = "price_vs_ema90",
+    adx_col: str = "adx_14",
+    long_threshold: float = -0.0015,
+    short_threshold: float = 0.0015,
+    adx_soft: float = 28.0,
+    adx_hard: float = 35.0,
+    stop_loss_pct: float = 0.0020,
+    take_profit_pct: float = 0.0065,
+    max_hold_bars: int = 1000,
+):
+    out, ts_col, symbol_col = _prepare(df)
+    plan = _empty_plan(out)
+
+    long_entry = out[z_col] <= long_threshold
+    short_entry = out[z_col] >= short_threshold
+
+    plan.loc[long_entry, "entry_signal"] = 1
+    plan.loc[short_entry, "entry_signal"] = -1
+
+    entry_mask = long_entry | short_entry
+
+    # size scaling
+    adx = out[adx_col]
+
+    size = np.where(adx <= adx_soft, 1.0,
+            np.where(adx <= adx_hard, 0.5, 0.0))
+
+    plan.loc[entry_mask, "size"] = size[entry_mask]
+
+    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
+    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
+    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+
+    return plan

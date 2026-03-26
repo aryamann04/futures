@@ -8,14 +8,7 @@ import pandas as pd
 from data.load import micro_futures_data
 from features.build_features import build_features
 from features.research import _filter_raw_data
-from backtest.strategies import (ema_mean_reversion, 
-                                 breakout_momentum, 
-                                 rsi_reversal, 
-                                 ema_adx_mean_reversion, 
-                                 ema_atr_mean_reversion, 
-                                 ema_bb_mean_reversion,
-                                 ema_adx_session_mean_reversion,
-                                 )
+import backtest.strategies as bt 
 
 from backtest.engine import run_backtest
 from backtest.metrics import compute_basic_metrics, plot_equity_curve
@@ -126,61 +119,59 @@ def build_experiments() -> List[BacktestSpec]:
     return [
         
         BacktestSpec(
-            name="ema100_adx_session_london_ny",
-            strategy_fn=ema_adx_session_mean_reversion,
+            name="ema90_soft_adx",
+            strategy_fn=bt.ema_adx_mean_reversion,
             strategy_kwargs={
-                "z_col": "price_vs_ema100",
+                "z_col": "price_vs_ema90",
                 "adx_col": "adx_14",
-                "session_col": "is_london_ny",
-                "long_threshold": -0.0018,
-                "short_threshold": 0.0018,
-                "adx_max": 20.0,
-                "stop_loss_pct": 0.0018,
-                "take_profit_pct": 0.0058,
-                "max_hold_bars": 1500,
-                "size": 1.0,
+                "long_threshold": -0.0015,
+                "short_threshold": 0.0015,
+                "adx_max": 28.0,
+                "stop_loss_pct": 0.0020,
+                "take_profit_pct": 0.0065,
+                "max_hold_bars": 1000,
             },
         ),
+
         BacktestSpec(
-            name="ema100_adx_session_us_morning",
-            strategy_fn=ema_adx_session_mean_reversion,
+            name="ema90_scaled_adx",
+            strategy_fn=bt.ema_adx_scaled_mean_reversion,
             strategy_kwargs={
-                "z_col": "price_vs_ema100",
+                "z_col": "price_vs_ema90",
                 "adx_col": "adx_14",
-                "session_col": "is_us_morning",
-                "long_threshold": -0.0018,
-                "short_threshold": 0.0018,
-                "adx_max": 20.0,
-                "stop_loss_pct": 0.0018,
-                "take_profit_pct": 0.0058,
-                "max_hold_bars": 1500,
-                "size": 1.0,
+                "long_threshold": -0.0015,
+                "short_threshold": 0.0015,
+                "adx_soft": 28.0,
+                "adx_hard": 35.0,
+                "stop_loss_pct": 0.0020,
+                "take_profit_pct": 0.0065,
+                "max_hold_bars": 1000,
             },
         ),
+
         BacktestSpec(
-            name="ema90_shorter_hold",
-            strategy_fn=ema_mean_reversion,
+            name="ema90_high_asymmetry",
+            strategy_fn=bt.ema_mean_reversion,
+            strategy_kwargs={
+                "z_col": "price_vs_ema90",
+                "long_threshold": -0.0015,
+                "short_threshold": 0.0015,
+                "stop_loss_pct": 0.0020,
+                "take_profit_pct": 0.0075,
+                "max_hold_bars": 1000,
+            },
+        ),
+
+        BacktestSpec(
+            name="ema90_short_hold_strict",
+            strategy_fn=bt.ema_mean_reversion,
             strategy_kwargs={
                 "z_col": "price_vs_ema90",
                 "long_threshold": -0.0016,
                 "short_threshold": 0.0016,
                 "stop_loss_pct": 0.0020,
-                "take_profit_pct": 0.0058,
-                "max_hold_bars": 1000,
-                "size": 1.0,
-            },
-        ),
-        BacktestSpec(
-            name="ema100_shorter_hold",
-            strategy_fn=ema_mean_reversion,
-            strategy_kwargs={
-                "z_col": "price_vs_ema100",
-                "long_threshold": -0.0018,
-                "short_threshold": 0.0018,
-                "stop_loss_pct": 0.0020,
-                "take_profit_pct": 0.0058,
-                "max_hold_bars": 1000,
-                "size": 1.0,
+                "take_profit_pct": 0.0060,
+                "max_hold_bars": 800,
             },
         ),
     ]
