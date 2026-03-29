@@ -61,7 +61,7 @@ def build_features_for_family(raw: pd.DataFrame, family: str) -> pd.DataFrame:
     if family == "ema":
         return build_features(
             raw,
-            add_basic_returns=False,
+            add_basic_returns=True,
             add_trend=True,
             add_momentum=False,
             add_volatility=True,
@@ -76,10 +76,25 @@ def build_features_for_family(raw: pd.DataFrame, family: str) -> pd.DataFrame:
     if family == "levels":
         return build_features(
             raw,
-            add_basic_returns=False,
+            add_basic_returns=True,
             add_trend=False,
             add_momentum=False,
             add_volatility=False,
+            add_volume=True,
+            add_session_levels=True,
+            add_opening_ranges=True,
+            add_rolling_ranges=True,
+            add_fvg=False,
+            shift_features=True,
+        )
+
+    if family == "hybrid":
+        return build_features(
+            raw,
+            add_basic_returns=True,
+            add_trend=True,
+            add_momentum=False,
+            add_volatility=True,
             add_volume=True,
             add_session_levels=True,
             add_opening_ranges=True,
@@ -187,7 +202,6 @@ def build_experiments() -> List[BacktestSpec]:
                 "max_hold_seconds": 600,
                 "size": 1.0,
             },
-            plot=True,
         ),
         BacktestSpec(
             name="ema100_low_adx_retest",
@@ -214,22 +228,6 @@ def build_experiments() -> List[BacktestSpec]:
                 "adx_col": "adx_14",
                 "long_threshold": -0.0017,
                 "short_threshold": 0.0017,
-                "adx_max": 20.0,
-                "stop_loss_pct": 0.0018,
-                "take_profit_pct": 0.0058,
-                "max_hold_seconds": 900,
-                "size": 1.0,
-            },
-        ),
-        BacktestSpec(
-            name="ema105_low_adx",
-            strategy_fn=bt.ema_adx_mean_reversion,
-            feature_family="ema",
-            strategy_kwargs={
-                "z_col": "price_vs_ema105",
-                "adx_col": "adx_14",
-                "long_threshold": -0.0018,
-                "short_threshold": 0.0018,
                 "adx_max": 20.0,
                 "stop_loss_pct": 0.0018,
                 "take_profit_pct": 0.0058,
@@ -266,22 +264,6 @@ def build_experiments() -> List[BacktestSpec]:
             },
         ),
         BacktestSpec(
-            name="prior_session_breakout",
-            strategy_fn=bt.prior_session_breakout,
-            feature_family="levels",
-            strategy_kwargs={
-                "high_col": "prev_session_high",
-                "low_col": "prev_session_low",
-                "breakout_buffer": 0.0003,
-                "volume_col": "rel_volume_20",
-                "volume_min": 1.2,
-                "stop_loss_pct": 0.0018,
-                "take_profit_pct": 0.0055,
-                "max_hold_seconds": 1200,
-                "size": 1.0,
-            },
-        ),
-        BacktestSpec(
             name="prior_session_failed_breakout",
             strategy_fn=bt.prior_session_failed_breakout,
             feature_family="levels",
@@ -298,47 +280,32 @@ def build_experiments() -> List[BacktestSpec]:
             },
         ),
         BacktestSpec(
-            name="opening_range_breakout_5m",
-            strategy_fn=bt.opening_range_breakout,
+            name="prior_session_failed_breakout_confirmed",
+            strategy_fn=bt.prior_session_failed_breakout_confirmed,
+            feature_family="levels",
+            strategy_kwargs={
+                "high_col": "prev_session_high",
+                "low_col": "prev_session_low",
+                "volume_col": "rel_volume_20",
+                "ret_col": "ret_1",
+                "sweep_buffer": 0.0005,
+                "volume_min": 1.5,
+                "stop_loss_pct": 0.0015,
+                "take_profit_pct": 0.0045,
+                "max_hold_seconds": 900,
+                "size": 1.0,
+            },
+        ),
+        BacktestSpec(
+            name="opening_range_failed_breakout_5m",
+            strategy_fn=bt.opening_range_failed_breakout,
             feature_family="levels",
             strategy_kwargs={
                 "high_col": "opening_range_high_5m",
                 "low_col": "opening_range_low_5m",
-                "breakout_buffer": 0.0002,
                 "volume_col": "rel_volume_20",
-                "volume_min": 1.2,
-                "stop_loss_pct": 0.0018,
-                "take_profit_pct": 0.0050,
-                "max_hold_seconds": 1200,
-                "size": 1.0,
-            },
-        ),
-        BacktestSpec(
-            name="opening_range_breakout_15m",
-            strategy_fn=bt.opening_range_breakout,
-            feature_family="levels",
-            strategy_kwargs={
-                "high_col": "opening_range_high_15m",
-                "low_col": "opening_range_low_15m",
-                "breakout_buffer": 0.0002,
-                "volume_col": "rel_volume_20",
-                "volume_min": 1.2,
-                "stop_loss_pct": 0.0018,
-                "take_profit_pct": 0.0050,
-                "max_hold_seconds": 1200,
-                "size": 1.0,
-            },
-        ),
-        BacktestSpec(
-            name="rolling_range_fade_30m",
-            strategy_fn=bt.rolling_range_fade,
-            feature_family="levels",
-            strategy_kwargs={
-                "high_col": "rolling_high_30m",
-                "low_col": "rolling_low_30m",
-                "sweep_buffer": 0.0002,
-                "volume_col": "rel_volume_20",
-                "volume_max": 1.5,
+                "sweep_buffer": 0.0003,
+                "volume_min": 1.5,
                 "stop_loss_pct": 0.0015,
                 "take_profit_pct": 0.0045,
                 "max_hold_seconds": 900,
@@ -346,16 +313,38 @@ def build_experiments() -> List[BacktestSpec]:
             },
         ),
         BacktestSpec(
-            name="rolling_range_fade_60m",
-            strategy_fn=bt.rolling_range_fade,
-            feature_family="levels",
+            name="ema_structure_mean_reversion",
+            strategy_fn=bt.ema_structure_mean_reversion,
+            feature_family="hybrid",
             strategy_kwargs={
-                "high_col": "rolling_high_60m",
-                "low_col": "rolling_low_60m",
-                "sweep_buffer": 0.0002,
-                "volume_col": "rel_volume_20",
-                "volume_max": 1.5,
-                "stop_loss_pct": 0.0015,
+                "z_col": "price_vs_ema90",
+                "adx_col": "adx_14",
+                "support_col": "prev_session_low",
+                "resistance_col": "prev_session_high",
+                "long_threshold": -0.0015,
+                "short_threshold": 0.0015,
+                "level_tolerance": 0.0010,
+                "adx_max": 22.0,
+                "stop_loss_pct": 0.0018,
+                "take_profit_pct": 0.0055,
+                "max_hold_seconds": 900,
+                "size": 1.0,
+            },
+        ),
+        BacktestSpec(
+            name="bollinger_exhaustion_reversal",
+            strategy_fn=bt.bollinger_exhaustion_reversal,
+            feature_family="hybrid",
+            strategy_kwargs={
+                "bb_col": "bb_pos",
+                "adx_col": "adx_14",
+                "resistance_col": "prev_session_high",
+                "support_col": "prev_session_low",
+                "upper_threshold": 0.95,
+                "lower_threshold": 0.05,
+                "adx_max": 25.0,
+                "level_tolerance": 0.0010,
+                "stop_loss_pct": 0.0018,
                 "take_profit_pct": 0.0045,
                 "max_hold_seconds": 900,
                 "size": 1.0,
@@ -364,15 +353,18 @@ def build_experiments() -> List[BacktestSpec]:
     ]
 
 
-def to_validation_specs(experiments: List[BacktestSpec]) -> List[ValidationSpec]:
-    return [
-        ValidationSpec(
-            name=spec.name,
-            strategy_fn=spec.strategy_fn,
-            strategy_kwargs=spec.strategy_kwargs,
-        )
-        for spec in experiments
-    ]
+def filter_experiments(
+    experiments: List[BacktestSpec],
+    family: Optional[str] = None,
+    names: Optional[list[str]] = None,
+) -> List[BacktestSpec]:
+    out = experiments
+    if family is not None:
+        out = [x for x in out if x.feature_family == family]
+    if names is not None:
+        wanted = set(names)
+        out = [x for x in out if x.name in wanted]
+    return out
 
 
 def run_full_sample_suite(
@@ -462,10 +454,10 @@ def run_oos_suite(
 def run_walk_forward_suite(
     feat_map: Dict[str, pd.DataFrame],
     experiments: List[BacktestSpec],
-    train_period: str = "120D",
-    test_period: str = "30D",
-    step_period: str = "30D",
-    start: str = "2025-01-01",
+    train_period: str = "365D",
+    test_period: str = "90D",
+    step_period: str = "90D",
+    start: str = "2021-01-01",
     end: str = "2026-03-01",
     initial_capital: float = 1000.0,
 ) -> pd.DataFrame:
@@ -519,11 +511,16 @@ def main():
     raw = load_raw_data(
         symbols_prefix="M6E",
         include_spreads=False,
-        start="2025-01-01",
+        start="2020-01-01",
         end="2026-03-01",
     )
 
     experiments = build_experiments()
+
+    # experiments = filter_experiments(experiments, family="ema")
+    # experiments = filter_experiments(experiments, family="levels")
+    # experiments = filter_experiments(experiments, family="hybrid")
+
     feat_map = prepare_feature_sets(raw, experiments)
 
     full_results, full_summary = run_full_sample_suite(
@@ -535,9 +532,9 @@ def main():
     oos_summary = run_oos_suite(
         feat_map=feat_map,
         experiments=experiments,
-        train_start="2025-01-01",
-        train_end="2025-10-01",
-        test_start="2025-10-01",
+        train_start="2021-01-01",
+        train_end="2024-01-01",
+        test_start="2024-01-01",
         test_end="2026-03-01",
         initial_capital=initial_capital,
     )
@@ -545,10 +542,10 @@ def main():
     wf_summary = run_walk_forward_suite(
         feat_map=feat_map,
         experiments=experiments,
-        train_period="120D",
-        test_period="30D",
-        step_period="30D",
-        start="2025-01-01",
+        train_period="365D",
+        test_period="90D",
+        step_period="90D",
+        start="2021-01-01",
         end="2026-03-01",
         initial_capital=initial_capital,
     )
