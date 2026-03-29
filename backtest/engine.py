@@ -18,6 +18,7 @@ CONTRACT_SPECS = {
     "M6S": {"multiplier": 12500.0},
     "MJY": {"multiplier": 1250000.0},
     "MNH": {"multiplier": 10000.0},
+    "MES": {"multiplier": 5.0}
 }
 
 

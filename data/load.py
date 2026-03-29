@@ -3,7 +3,20 @@ from pathlib import Path
 
 import pandas as pd
 
-BASE_DIR = Path(__file__).resolve().parent / "micro-futures-databento"
+
+DATA_ROOT = Path(__file__).resolve().parent
+
+DATASET_DIRS = {
+    "micro_currency_futures": "micro-currency-futures-databento",
+    "micro_sp_futures": "micro-sp-futures-databento",
+}
+
+
+def _resolve_base_dir(dataset: str) -> Path:
+    if dataset not in DATASET_DIRS:
+        valid = ", ".join(DATASET_DIRS.keys())
+        raise ValueError(f"Unknown dataset '{dataset}'. Valid options: {valid}")
+    return DATA_ROOT / DATASET_DIRS[dataset]
 
 
 def _read_json(path: Path):
@@ -11,20 +24,29 @@ def _read_json(path: Path):
         return json.load(f)
 
 
-def load_metadata():
-    return _read_json(BASE_DIR / "metadata.json")
+def load_metadata(dataset: str = "micro_currency_futures"):
+    base_dir = _resolve_base_dir(dataset)
+    return _read_json(base_dir / "metadata.json")
 
 
-def load_manifest():
-    return _read_json(BASE_DIR / "manifest.json")
+def load_manifest(dataset: str = "micro_currency_futures"):
+    base_dir = _resolve_base_dir(dataset)
+    return _read_json(base_dir / "manifest.json")
 
 
-def load_conditions():
-    return pd.DataFrame(_read_json(BASE_DIR / "condition.json"))
+def load_conditions(dataset: str = "micro_currency_futures"):
+    base_dir = _resolve_base_dir(dataset)
+    return pd.DataFrame(_read_json(base_dir / "condition.json"))
 
 
-def micro_futures_data(columns=None, chunksize=None):
-    path = BASE_DIR / "data.csv"
+def futures_data(
+    dataset: str = "micro_currency_futures",
+    columns=None,
+    chunksize=None,
+):
+    base_dir = _resolve_base_dir(dataset)
+    path = base_dir / "data.csv"
+
     header = pd.read_csv(path, nrows=0)
     raw_columns = header.columns.tolist()
     lower_map = {c.lower(): c for c in raw_columns}
@@ -43,8 +65,22 @@ def micro_futures_data(columns=None, chunksize=None):
     return df
 
 
+def micro_futures_data(
+    columns=None,
+    chunksize=None,
+    dataset: str = "micro_currency_futures",
+):
+    return futures_data(
+        dataset=dataset,
+        columns=columns,
+        chunksize=chunksize,
+    )
+
+
 if __name__ == "__main__":
-    print(load_metadata())
-    print(load_manifest())
-    print(load_conditions().head())
-    print(micro_futures_data(chunksize=5).__next__())
+    for dataset in ["micro_currency_futures", "micro_sp_futures"]:
+        print(f"\nDATASET: {dataset}")
+        print(load_metadata(dataset))
+        print(load_manifest(dataset))
+        print(load_conditions(dataset).head())
+        print(next(futures_data(dataset=dataset, chunksize=5)))
