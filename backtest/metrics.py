@@ -61,7 +61,7 @@ def equity_curve(trades: pd.DataFrame, initial_capital: float = 1000.0) -> pd.Da
     return curve
 
 
-def compute_basic_metrics(trades: pd.DataFrame, initial_capital: float = 1000.0):
+def compute_basic_metrics(trades: pd.DataFrame, initial_capital: float = 10000.0):
     trades = _validate_trades(trades)
 
     if len(trades) == 0:
@@ -83,13 +83,29 @@ def compute_basic_metrics(trades: pd.DataFrame, initial_capital: float = 1000.0)
     if total_seconds <= 0 or start_equity <= 0 or end_equity <= 0:
         cagr = np.nan
     else:
-        cagr = (end_equity / start_equity) ** (SECONDS_PER_YEAR / total_seconds) - 1.0
+        annual_factor = SECONDS_PER_YEAR / total_seconds
+        log_return = np.log(end_equity / start_equity)
+
+        if not np.isfinite(annual_factor) or not np.isfinite(log_return):
+            cagr = np.nan
+        elif annual_factor > 1e4:
+            cagr = np.nan
+        else:
+            annualized_log_return = log_return * annual_factor
+
+            if annualized_log_return > 700:
+                cagr = np.nan
+            elif annualized_log_return < -700:
+                cagr = -1.0
+            else:
+                cagr = np.exp(annualized_log_return) - 1.0
 
     returns = curve["returns"]
-    if returns.std(ddof=1) == 0 or np.isnan(returns.std(ddof=1)):
+    vol = returns.std(ddof=1)
+    if vol == 0 or np.isnan(vol):
         sharpe = np.nan
     else:
-        sharpe = (returns.mean() / returns.std(ddof=1)) * np.sqrt(len(returns))
+        sharpe = (returns.mean() / vol) * np.sqrt(len(returns))
 
     max_drawdown = float(curve["drawdown"].min())
 
@@ -110,8 +126,8 @@ def compute_basic_metrics(trades: pd.DataFrame, initial_capital: float = 1000.0)
     print(f"Ending Capital      : {end_equity:,.2f}")
     print(f"Total PnL ($)       : {total_pnl_dollars:,.2f}")
     print(f"Total Return        : {total_return:.4f}")
-    print(f"CAGR                : {cagr:.4f}")
-    print(f"Sharpe              : {sharpe:.4f}")
+    print(f"CAGR                : {cagr:.4f}" if np.isfinite(cagr) else "CAGR                : nan")
+    print(f"Sharpe              : {sharpe:.4f}" if np.isfinite(sharpe) else "Sharpe              : nan")
     print(f"Max Drawdown        : {max_drawdown:.4f}")
     print(f"Total Trades        : {len(trades):,}")
     print(f"Win Rate            : {win_rate:.4f}")
@@ -138,6 +154,7 @@ def compute_basic_metrics(trades: pd.DataFrame, initial_capital: float = 1000.0)
         "median_return": median_trade_return,
         "avg_ret_notional": avg_ret_notional,
         "median_ret_notional": median_ret_notional,
+        "total_trades": len(trades),
     }
 
 

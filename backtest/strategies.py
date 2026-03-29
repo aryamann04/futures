@@ -25,7 +25,11 @@ def _prepare(
     out.columns = [c.lower() for c in out.columns]
 
     ts_col = ts_col or _pick_column(out.columns, ["ts_event", "timestamp", "datetime", "date", "marketdate"])
-    symbol_col = symbol_col or _pick_column(out.columns, ["symbol", "raw_symbol", "instrument_id", "ticker"], required=False)
+    symbol_col = symbol_col or _pick_column(
+        out.columns,
+        ["symbol", "raw_symbol", "instrument_id", "ticker"],
+        required=False,
+    )
 
     out[ts_col] = pd.to_datetime(out[ts_col], errors="coerce")
     out = out.dropna(subset=[ts_col]).sort_values(([symbol_col] if symbol_col else []) + [ts_col]).reset_index(drop=True)
@@ -40,8 +44,29 @@ def _empty_plan(df: pd.DataFrame) -> pd.DataFrame:
     out["stop_loss_pct"] = np.nan
     out["take_profit_pct"] = np.nan
     out["max_hold_bars"] = np.nan
+    out["max_hold_seconds"] = np.nan
     out["size"] = 1.0
     return out
+
+
+def _set_trade_params(
+    plan: pd.DataFrame,
+    entry_mask: pd.Series,
+    stop_loss_pct: float,
+    take_profit_pct: float,
+    max_hold_bars: Optional[int],
+    max_hold_seconds: Optional[float],
+    size: float,
+) -> None:
+    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
+    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
+
+    if max_hold_bars is not None:
+        plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+    if max_hold_seconds is not None:
+        plan.loc[entry_mask, "max_hold_seconds"] = max_hold_seconds
+
+    plan.loc[entry_mask, "size"] = size
 
 
 def ema_mean_reversion(
@@ -51,7 +76,8 @@ def ema_mean_reversion(
     short_threshold: float = 0.0015,
     stop_loss_pct: float = 0.0015,
     take_profit_pct: float = 0.0025,
-    max_hold_bars: int = 300,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -69,10 +95,7 @@ def ema_mean_reversion(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
 
@@ -86,7 +109,8 @@ def breakout_momentum(
     vol_min: Optional[float] = None,
     stop_loss_pct: float = 0.0015,
     take_profit_pct: float = 0.0030,
-    max_hold_bars: int = 300,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -109,10 +133,7 @@ def breakout_momentum(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
 
@@ -124,7 +145,8 @@ def rsi_reversal(
     short_threshold: float = 70.0,
     stop_loss_pct: float = 0.0015,
     take_profit_pct: float = 0.0025,
-    max_hold_bars: int = 300,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -142,10 +164,7 @@ def rsi_reversal(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
 
@@ -156,7 +175,8 @@ def combine_entry_rules(
     short_rule: pd.Series,
     stop_loss_pct: float,
     take_profit_pct: float,
-    max_hold_bars: int,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
 ) -> pd.DataFrame:
     plan = _empty_plan(df)
@@ -168,12 +188,10 @@ def combine_entry_rules(
     plan.loc[short_rule, "entry_signal"] = -1
 
     entry_mask = long_rule | short_rule
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
+
 
 def ema_bb_mean_reversion(
     df: pd.DataFrame,
@@ -185,13 +203,19 @@ def ema_bb_mean_reversion(
     short_bb: float = 0.85,
     stop_loss_pct: float = 0.0018,
     take_profit_pct: float = 0.0055,
-    max_hold_bars: int = 1200,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
 ) -> pd.DataFrame:
     out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
     plan = _empty_plan(out)
+
+    if z_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {z_col}")
+    if bb_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {bb_col}")
 
     long_entry = (plan[z_col] <= long_z) & (plan[bb_col] <= long_bb)
     short_entry = (plan[z_col] >= short_z) & (plan[bb_col] >= short_bb)
@@ -200,12 +224,10 @@ def ema_bb_mean_reversion(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
+
 
 def ema_adx_mean_reversion(
     df: pd.DataFrame,
@@ -216,13 +238,19 @@ def ema_adx_mean_reversion(
     adx_max: float = 22.0,
     stop_loss_pct: float = 0.0018,
     take_profit_pct: float = 0.0055,
-    max_hold_bars: int = 1200,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
 ) -> pd.DataFrame:
     out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
     plan = _empty_plan(out)
+
+    if z_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {z_col}")
+    if adx_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {adx_col}")
 
     long_entry = (plan[z_col] <= long_threshold) & (plan[adx_col] <= adx_max)
     short_entry = (plan[z_col] >= short_threshold) & (plan[adx_col] <= adx_max)
@@ -231,12 +259,10 @@ def ema_adx_mean_reversion(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
+
 
 def ema_atr_mean_reversion(
     df: pd.DataFrame,
@@ -245,13 +271,17 @@ def ema_atr_mean_reversion(
     short_threshold: float = 1.25,
     stop_loss_pct: float = 0.0018,
     take_profit_pct: float = 0.0055,
-    max_hold_bars: int = 1200,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
 ) -> pd.DataFrame:
     out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
     plan = _empty_plan(out)
+
+    if z_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {z_col}")
 
     long_entry = plan[z_col] <= long_threshold
     short_entry = plan[z_col] >= short_threshold
@@ -260,12 +290,10 @@ def ema_atr_mean_reversion(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
+
 
 def ema_adx_session_mean_reversion(
     df: pd.DataFrame,
@@ -277,13 +305,21 @@ def ema_adx_session_mean_reversion(
     adx_max: float = 20.0,
     stop_loss_pct: float = 0.0018,
     take_profit_pct: float = 0.0058,
-    max_hold_bars: int = 1500,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
 ) -> pd.DataFrame:
     out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
     plan = _empty_plan(out)
+
+    if z_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {z_col}")
+    if adx_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {adx_col}")
+    if session_col not in plan.columns:
+        raise ValueError(f"Missing feature column: {session_col}")
 
     long_entry = (
         (plan[z_col] <= long_threshold)
@@ -300,12 +336,10 @@ def ema_adx_session_mean_reversion(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
+
 
 def ema_adx_scaled_mean_reversion(
     df: pd.DataFrame,
@@ -317,10 +351,18 @@ def ema_adx_scaled_mean_reversion(
     adx_hard: float = 35.0,
     stop_loss_pct: float = 0.0020,
     take_profit_pct: float = 0.0065,
-    max_hold_bars: int = 1000,
-):
-    out, ts_col, symbol_col = _prepare(df)
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
+    ts_col: Optional[str] = None,
+    symbol_col: Optional[str] = None,
+) -> pd.DataFrame:
+    out, ts_col, symbol_col = _prepare(df, ts_col=ts_col, symbol_col=symbol_col)
     plan = _empty_plan(out)
+
+    if z_col not in out.columns:
+        raise ValueError(f"Missing feature column: {z_col}")
+    if adx_col not in out.columns:
+        raise ValueError(f"Missing feature column: {adx_col}")
 
     long_entry = out[z_col] <= long_threshold
     short_entry = out[z_col] >= short_threshold
@@ -329,20 +371,21 @@ def ema_adx_scaled_mean_reversion(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-
-    # size scaling
     adx = out[adx_col]
 
-    size = np.where(adx <= adx_soft, 1.0,
-            np.where(adx <= adx_hard, 0.5, 0.0))
-
+    size = np.where(adx <= adx_soft, 1.0, np.where(adx <= adx_hard, 0.5, 0.0))
     plan.loc[entry_mask, "size"] = size[entry_mask]
 
     plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
     plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+
+    if max_hold_bars is not None:
+        plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
+    if max_hold_seconds is not None:
+        plan.loc[entry_mask, "max_hold_seconds"] = max_hold_seconds
 
     return plan
+
 
 def prior_session_breakout(
     df: pd.DataFrame,
@@ -353,7 +396,8 @@ def prior_session_breakout(
     volume_min: Optional[float] = None,
     stop_loss_pct: float = 0.0018,
     take_profit_pct: float = 0.0050,
-    max_hold_bars: int = 1200,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -376,10 +420,7 @@ def prior_session_breakout(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
 
@@ -393,7 +434,8 @@ def prior_session_failed_breakout(
     volume_min: Optional[float] = None,
     stop_loss_pct: float = 0.0015,
     take_profit_pct: float = 0.0045,
-    max_hold_bars: int = 900,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -423,10 +465,7 @@ def prior_session_failed_breakout(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
 
@@ -440,7 +479,8 @@ def opening_range_breakout(
     volume_min: Optional[float] = None,
     stop_loss_pct: float = 0.0018,
     take_profit_pct: float = 0.0050,
-    max_hold_bars: int = 1200,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -463,10 +503,7 @@ def opening_range_breakout(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan
 
@@ -480,7 +517,8 @@ def rolling_range_fade(
     volume_max: Optional[float] = None,
     stop_loss_pct: float = 0.0015,
     take_profit_pct: float = 0.0045,
-    max_hold_bars: int = 900,
+    max_hold_bars: Optional[int] = None,
+    max_hold_seconds: Optional[float] = None,
     size: float = 1.0,
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
@@ -510,9 +548,6 @@ def rolling_range_fade(
     plan.loc[short_entry, "entry_signal"] = -1
 
     entry_mask = long_entry | short_entry
-    plan.loc[entry_mask, "stop_loss_pct"] = stop_loss_pct
-    plan.loc[entry_mask, "take_profit_pct"] = take_profit_pct
-    plan.loc[entry_mask, "max_hold_bars"] = max_hold_bars
-    plan.loc[entry_mask, "size"] = size
+    _set_trade_params(plan, entry_mask, stop_loss_pct, take_profit_pct, max_hold_bars, max_hold_seconds, size)
 
     return plan

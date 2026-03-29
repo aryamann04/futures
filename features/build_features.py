@@ -17,14 +17,14 @@ def _pick_column(columns, candidates, required=True):
     return None
 
 
-def _to_float_series(df: pd.DataFrame, col: Optional[str]) -> Optional[pd.Series]:
+def _to_float_series(df: pd.DataFrame, col: Optional[str], dtype: str = "float64") -> Optional[pd.Series]:
     if col is None:
         return None
-    return pd.to_numeric(df[col], errors="coerce").astype(float)
+    return pd.to_numeric(df[col], errors="coerce").astype(dtype)
 
 
-def _safe_talib_series(values, index, shift=True):
-    s = pd.Series(values, index=index)
+def _safe_talib_series(values, index, shift=True, dtype: str = "float64"):
+    s = pd.Series(values, index=index, dtype=dtype)
     return s.shift(1) if shift else s
 
 
@@ -67,7 +67,17 @@ def _opening_range_levels(
     mapped_high = mapped_high.where(available)
     mapped_low = mapped_low.where(available)
 
-    return mapped_high.astype(float), mapped_low.astype(float)
+    return mapped_high.astype("float32"), mapped_low.astype("float32")
+
+
+def _downcast_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for col in out.columns:
+        if pd.api.types.is_float_dtype(out[col]):
+            out[col] = pd.to_numeric(out[col], downcast="float")
+        elif pd.api.types.is_integer_dtype(out[col]):
+            out[col] = pd.to_numeric(out[col], downcast="integer")
+    return out
 
 
 def build_features(
@@ -79,6 +89,10 @@ def build_features(
     add_momentum: bool = True,
     add_volatility: bool = True,
     add_volume: bool = True,
+    add_session_levels: bool = True,
+    add_opening_ranges: bool = True,
+    add_rolling_ranges: bool = True,
+    add_fvg: bool = True,
     shift_features: bool = True,
 ) -> pd.DataFrame:
     df = df.copy()
@@ -114,13 +128,13 @@ def build_features(
         feature_cols: dict[str, pd.Series] = {}
 
         if add_basic_returns:
-            feature_cols["ret_1"] = close.pct_change(1).shift(1 if shift_features else 0)
-            feature_cols["ret_5"] = close.pct_change(5).shift(1 if shift_features else 0)
-            feature_cols["ret_10"] = close.pct_change(10).shift(1 if shift_features else 0)
-            feature_cols["logret_1"] = np.log(safe_close).diff(1).shift(1 if shift_features else 0)
-            feature_cols["logret_5"] = np.log(safe_close).diff(5).shift(1 if shift_features else 0)
-            feature_cols["hl_spread"] = ((high - low) / close.replace(0, np.nan)).shift(1 if shift_features else 0)
-            feature_cols["oc_spread"] = ((close - open_) / open_.replace(0, np.nan)).shift(1 if shift_features else 0)
+            feature_cols["ret_1"] = close.pct_change(1).shift(1 if shift_features else 0).astype("float32")
+            feature_cols["ret_5"] = close.pct_change(5).shift(1 if shift_features else 0).astype("float32")
+            feature_cols["ret_10"] = close.pct_change(10).shift(1 if shift_features else 0).astype("float32")
+            feature_cols["logret_1"] = np.log(safe_close).diff(1).shift(1 if shift_features else 0).astype("float32")
+            feature_cols["logret_5"] = np.log(safe_close).diff(5).shift(1 if shift_features else 0).astype("float32")
+            feature_cols["hl_spread"] = ((high - low) / close.replace(0, np.nan)).shift(1 if shift_features else 0).astype("float32")
+            feature_cols["oc_spread"] = ((close - open_) / open_.replace(0, np.nan)).shift(1 if shift_features else 0).astype("float32")
 
         if add_trend:
             for win in ema_sma_windows:
@@ -129,8 +143,8 @@ def build_features(
 
                 feature_cols[f"sma_{win}"] = sma
                 feature_cols[f"ema_{win}"] = ema
-                feature_cols[f"price_vs_sma{win}"] = close / sma - 1.0
-                feature_cols[f"price_vs_ema{win}"] = close / ema - 1.0
+                feature_cols[f"price_vs_sma{win}"] = (close / sma - 1.0).astype("float32")
+                feature_cols[f"price_vs_ema{win}"] = (close / ema - 1.0).astype("float32")
 
             macd, macd_signal, macd_hist = talib.MACD(close.values, fastperiod=12, slowperiod=26, signalperiod=9)
             feature_cols["macd"] = _safe_talib_series(macd, g.index, shift_features)
@@ -192,99 +206,109 @@ def build_features(
             feature_cols["bb_upper"] = bb_upper
             feature_cols["bb_middle"] = bb_middle
             feature_cols["bb_lower"] = bb_lower
-            feature_cols["bb_width"] = (bb_upper - bb_lower) / bb_middle.replace(0, np.nan)
-            feature_cols["bb_pos"] = (close - bb_lower) / (bb_upper - bb_lower).replace(0, np.nan)
+            feature_cols["bb_width"] = ((bb_upper - bb_lower) / bb_middle.replace(0, np.nan)).astype("float32")
+            feature_cols["bb_pos"] = ((close - bb_lower) / (bb_upper - bb_lower).replace(0, np.nan)).astype("float32")
             feature_cols["adx_14"] = adx_14
 
             if "ema_80" in feature_cols:
-                feature_cols["ema80_atr_dist"] = (close - feature_cols["ema_80"]) / atr_14.replace(0, np.nan)
+                feature_cols["ema80_atr_dist"] = ((close - feature_cols["ema_80"]) / atr_14.replace(0, np.nan)).astype("float32")
             if "ema_100" in feature_cols:
-                feature_cols["ema100_atr_dist"] = (close - feature_cols["ema_100"]) / atr_14.replace(0, np.nan)
+                feature_cols["ema100_atr_dist"] = ((close - feature_cols["ema_100"]) / atr_14.replace(0, np.nan)).astype("float32")
 
         if add_volume and volume is not None:
             obv = _safe_talib_series(talib.OBV(close.values, volume.values), g.index, shift_features)
             vol_sma_20 = _safe_talib_series(talib.SMA(volume.values, timeperiod=20), g.index, shift_features)
 
+            rel_volume_20 = (volume / vol_sma_20.replace(0, np.nan)).astype("float32")
+
             feature_cols["obv"] = obv
             feature_cols["vol_sma_20"] = vol_sma_20
-            feature_cols["rel_volume_20"] = volume / vol_sma_20.replace(0, np.nan)
-            feature_cols["volume_spike_20"] = (feature_cols["rel_volume_20"] >= 2.0).astype(float)
+            feature_cols["rel_volume_20"] = rel_volume_20
+            feature_cols["volume_spike_20"] = (rel_volume_20 >= 2.0).astype("int8")
 
-        date_utc = g[ts_col].dt.floor("D")
-        hour_utc = g[ts_col].dt.hour
-        minute_of_day_utc = g[ts_col].dt.hour * 60 + g[ts_col].dt.minute
+        if add_session_levels or add_opening_ranges:
+            date_utc = g[ts_col].dt.floor("D")
+            hour_utc = g[ts_col].dt.hour.astype("int16")
+            minute_of_day_utc = (g[ts_col].dt.hour * 60 + g[ts_col].dt.minute).astype("int16")
 
-        feature_cols["date_utc"] = date_utc
-        feature_cols["hour_utc"] = hour_utc
-        feature_cols["minute_of_day_utc"] = minute_of_day_utc
-        feature_cols["is_london_ny"] = ((hour_utc >= 8) & (hour_utc <= 16)).astype(int)
-        feature_cols["is_us_morning"] = ((hour_utc >= 13) & (hour_utc <= 17)).astype(int)
+            feature_cols["date_utc"] = date_utc
+            feature_cols["hour_utc"] = hour_utc
+            feature_cols["minute_of_day_utc"] = minute_of_day_utc
+            feature_cols["is_london_ny"] = ((hour_utc >= 8) & (hour_utc <= 16)).astype("int8")
+            feature_cols["is_us_morning"] = ((hour_utc >= 13) & (hour_utc <= 17)).astype("int8")
 
-        session_high = g.groupby(date_utc)[high_col].max()
-        session_low = g.groupby(date_utc)[low_col].min()
+        if add_session_levels:
+            session_high = g.groupby(date_utc)[high_col].max()
+            session_low = g.groupby(date_utc)[low_col].min()
 
-        prev_session_high = date_utc.map(session_high.shift(1)).astype(float)
-        prev_session_low = date_utc.map(session_low.shift(1)).astype(float)
+            prev_session_high = date_utc.map(session_high.shift(1)).astype("float32")
+            prev_session_low = date_utc.map(session_low.shift(1)).astype("float32")
 
-        feature_cols["prev_session_high"] = prev_session_high
-        feature_cols["prev_session_low"] = prev_session_low
-        feature_cols["dist_prev_session_high"] = close / prev_session_high - 1.0
-        feature_cols["dist_prev_session_low"] = close / prev_session_low - 1.0
+            feature_cols["prev_session_high"] = prev_session_high
+            feature_cols["prev_session_low"] = prev_session_low
+            feature_cols["dist_prev_session_high"] = (close / prev_session_high - 1.0).astype("float32")
+            feature_cols["dist_prev_session_low"] = (close / prev_session_low - 1.0).astype("float32")
 
-        or_high_5, or_low_5 = _opening_range_levels(g, ts_col=ts_col, high_col=high_col, low_col=low_col, minutes=5)
-        or_high_15, or_low_15 = _opening_range_levels(g, ts_col=ts_col, high_col=high_col, low_col=low_col, minutes=15)
+        if add_opening_ranges:
+            or_high_5, or_low_5 = _opening_range_levels(g, ts_col=ts_col, high_col=high_col, low_col=low_col, minutes=5)
+            or_high_15, or_low_15 = _opening_range_levels(g, ts_col=ts_col, high_col=high_col, low_col=low_col, minutes=15)
 
-        feature_cols["opening_range_high_5m"] = or_high_5
-        feature_cols["opening_range_low_5m"] = or_low_5
-        feature_cols["opening_range_high_15m"] = or_high_15
-        feature_cols["opening_range_low_15m"] = or_low_15
+            feature_cols["opening_range_high_5m"] = or_high_5
+            feature_cols["opening_range_low_5m"] = or_low_5
+            feature_cols["opening_range_high_15m"] = or_high_15
+            feature_cols["opening_range_low_15m"] = or_low_15
 
-        feature_cols["dist_or_high_5m"] = close / or_high_5 - 1.0
-        feature_cols["dist_or_low_5m"] = close / or_low_5 - 1.0
-        feature_cols["dist_or_high_15m"] = close / or_high_15 - 1.0
-        feature_cols["dist_or_low_15m"] = close / or_low_15 - 1.0
+            feature_cols["dist_or_high_5m"] = (close / or_high_5 - 1.0).astype("float32")
+            feature_cols["dist_or_low_5m"] = (close / or_low_5 - 1.0).astype("float32")
+            feature_cols["dist_or_high_15m"] = (close / or_high_15 - 1.0).astype("float32")
+            feature_cols["dist_or_low_15m"] = (close / or_low_15 - 1.0).astype("float32")
 
-        rolling_high_30m = _rolling_level(high, window=1800, shift_features=shift_features, fn="max")
-        rolling_low_30m = _rolling_level(low, window=1800, shift_features=shift_features, fn="min")
-        rolling_high_60m = _rolling_level(high, window=3600, shift_features=shift_features, fn="max")
-        rolling_low_60m = _rolling_level(low, window=3600, shift_features=shift_features, fn="min")
+        if add_rolling_ranges:
+            rolling_high_30m = _rolling_level(high, window=1800, shift_features=shift_features, fn="max").astype("float32")
+            rolling_low_30m = _rolling_level(low, window=1800, shift_features=shift_features, fn="min").astype("float32")
+            rolling_high_60m = _rolling_level(high, window=3600, shift_features=shift_features, fn="max").astype("float32")
+            rolling_low_60m = _rolling_level(low, window=3600, shift_features=shift_features, fn="min").astype("float32")
 
-        feature_cols["rolling_high_30m"] = rolling_high_30m
-        feature_cols["rolling_low_30m"] = rolling_low_30m
-        feature_cols["rolling_high_60m"] = rolling_high_60m
-        feature_cols["rolling_low_60m"] = rolling_low_60m
+            feature_cols["rolling_high_30m"] = rolling_high_30m
+            feature_cols["rolling_low_30m"] = rolling_low_30m
+            feature_cols["rolling_high_60m"] = rolling_high_60m
+            feature_cols["rolling_low_60m"] = rolling_low_60m
 
-        feature_cols["dist_rolling_high_30m"] = close / rolling_high_30m - 1.0
-        feature_cols["dist_rolling_low_30m"] = close / rolling_low_30m - 1.0
-        feature_cols["dist_rolling_high_60m"] = close / rolling_high_60m - 1.0
-        feature_cols["dist_rolling_low_60m"] = close / rolling_low_60m - 1.0
+            feature_cols["dist_rolling_high_30m"] = (close / rolling_high_30m - 1.0).astype("float32")
+            feature_cols["dist_rolling_low_30m"] = (close / rolling_low_30m - 1.0).astype("float32")
+            feature_cols["dist_rolling_high_60m"] = (close / rolling_high_60m - 1.0).astype("float32")
+            feature_cols["dist_rolling_low_60m"] = (close / rolling_low_60m - 1.0).astype("float32")
 
-        bullish_fvg = low > high.shift(2)
-        bearish_fvg = high < low.shift(2)
+        if add_fvg:
+            bullish_fvg = (low > high.shift(2))
+            bearish_fvg = (high < low.shift(2))
 
-        bullish_fvg_lower = high.shift(2).where(bullish_fvg)
-        bullish_fvg_upper = low.where(bullish_fvg)
-        bearish_fvg_lower = high.where(bearish_fvg)
-        bearish_fvg_upper = low.shift(2).where(bearish_fvg)
+            bullish_fvg_lower = high.shift(2).where(bullish_fvg).astype("float32")
+            bullish_fvg_upper = low.where(bullish_fvg).astype("float32")
+            bearish_fvg_lower = high.where(bearish_fvg).astype("float32")
+            bearish_fvg_upper = low.shift(2).where(bearish_fvg).astype("float32")
 
-        feature_cols["bullish_fvg"] = bullish_fvg.astype(int)
-        feature_cols["bearish_fvg"] = bearish_fvg.astype(int)
-        feature_cols["bullish_fvg_lower"] = bullish_fvg_lower
-        feature_cols["bullish_fvg_upper"] = bullish_fvg_upper
-        feature_cols["bearish_fvg_lower"] = bearish_fvg_lower
-        feature_cols["bearish_fvg_upper"] = bearish_fvg_upper
-        feature_cols["inside_bullish_fvg"] = (
-            (close >= bullish_fvg_lower) & (close <= bullish_fvg_upper)
-        ).fillna(False).astype(int)
-        feature_cols["inside_bearish_fvg"] = (
-            (close >= bearish_fvg_lower) & (close <= bearish_fvg_upper)
-        ).fillna(False).astype(int)
+            feature_cols["bullish_fvg"] = bullish_fvg.astype("int8")
+            feature_cols["bearish_fvg"] = bearish_fvg.astype("int8")
+            feature_cols["bullish_fvg_lower"] = bullish_fvg_lower
+            feature_cols["bullish_fvg_upper"] = bullish_fvg_upper
+            feature_cols["bearish_fvg_lower"] = bearish_fvg_lower
+            feature_cols["bearish_fvg_upper"] = bearish_fvg_upper
+            feature_cols["inside_bullish_fvg"] = (
+                (close >= bullish_fvg_lower) & (close <= bullish_fvg_upper)
+            ).fillna(False).astype("int8")
+            feature_cols["inside_bearish_fvg"] = (
+                (close >= bearish_fvg_lower) & (close <= bearish_fvg_upper)
+            ).fillna(False).astype("int8")
 
         feature_df = pd.DataFrame(feature_cols, index=g.index)
-        g_out = pd.concat([g, feature_df], axis=1).copy()
+        g_out = pd.concat([g, feature_df], axis=1)
+        g_out = _downcast_numeric(g_out)
         out.append(g_out)
 
-    return pd.concat(out, axis=0, ignore_index=True)
+    final = pd.concat(out, axis=0, ignore_index=True)
+    final = _downcast_numeric(final)
+    return final
 
 
 def add_targets(
@@ -307,17 +331,18 @@ def add_targets(
     out = []
 
     for _, g in df.groupby(symbol_col, sort=False):
-        g = g.copy()
-        close = pd.to_numeric(g[close_col], errors="coerce").astype(float)
-
-        target_cols = {}
+        close = pd.to_numeric(g[close_col], errors="coerce").astype("float32")
         safe_close = close.where(close > 0)
 
+        target_cols = {}
         for h in horizons:
-            target_cols[f"target_fwd_ret_{h}s"] = close.shift(-h) / close - 1.0
-            target_cols[f"target_fwd_logret_{h}s"] = np.log(safe_close.shift(-h)) - np.log(safe_close)
+            target_cols[f"target_fwd_ret_{h}s"] = (close.shift(-h) / close - 1.0).astype("float32")
+            target_cols[f"target_fwd_logret_{h}s"] = (np.log(safe_close.shift(-h)) - np.log(safe_close)).astype("float32")
 
-        g_out = pd.concat([g, pd.DataFrame(target_cols, index=g.index)], axis=1).copy()
+        g_out = pd.concat([g, pd.DataFrame(target_cols, index=g.index)], axis=1)
+        g_out = _downcast_numeric(g_out)
         out.append(g_out)
 
-    return pd.concat(out, axis=0, ignore_index=True)
+    final = pd.concat(out, axis=0, ignore_index=True)
+    final = _downcast_numeric(final)
+    return final

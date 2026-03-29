@@ -86,14 +86,15 @@ def _prepare_df(
         "stop_loss_pct": np.nan,
         "take_profit_pct": np.nan,
         "max_hold_bars": np.nan,
+        "max_hold_seconds": np.nan,
         "size": 1.0,
     }
     for col, default_val in default_cols.items():
         if col not in out.columns:
             out[col] = default_val
 
-    out["entry_signal"] = pd.to_numeric(out["entry_signal"], errors="coerce").fillna(0).astype(int)
-    out["exit_signal"] = pd.to_numeric(out["exit_signal"], errors="coerce").fillna(0).astype(int)
+    out["entry_signal"] = pd.to_numeric(out["entry_signal"], errors="coerce").fillna(0).astype(np.int8)
+    out["exit_signal"] = pd.to_numeric(out["exit_signal"], errors="coerce").fillna(0).astype(np.int8)
     out["size"] = pd.to_numeric(out["size"], errors="coerce").fillna(1.0)
 
     numeric_cols = [
@@ -106,6 +107,7 @@ def _prepare_df(
         "stop_loss_pct",
         "take_profit_pct",
         "max_hold_bars",
+        "max_hold_seconds",
     ]
     for col in numeric_cols:
         out[col] = pd.to_numeric(out[col], errors="coerce")
@@ -134,16 +136,10 @@ def _absolute_levels_from_pct(side: int, entry_price: float, stop_loss_pct: floa
     take_profit = np.nan
 
     if np.isfinite(stop_loss_pct):
-        if side == 1:
-            stop_loss = entry_price * (1.0 - stop_loss_pct)
-        else:
-            stop_loss = entry_price * (1.0 + stop_loss_pct)
+        stop_loss = entry_price * (1.0 - stop_loss_pct) if side == 1 else entry_price * (1.0 + stop_loss_pct)
 
     if np.isfinite(take_profit_pct):
-        if side == 1:
-            take_profit = entry_price * (1.0 + take_profit_pct)
-        else:
-            take_profit = entry_price * (1.0 - take_profit_pct)
+        take_profit = entry_price * (1.0 + take_profit_pct) if side == 1 else entry_price * (1.0 - take_profit_pct)
 
     return stop_loss, take_profit
 
@@ -226,65 +222,76 @@ def _run_single_symbol(
     ts_col: str,
     symbol_col: Optional[str] = None,
     contract_specs: Optional[dict] = None,
+    commission_per_side: float = 0.75,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     n = len(df)
 
-    position = np.zeros(n, dtype=int)
-    entry_price_col = np.full(n, np.nan)
-    exit_price_col = np.full(n, np.nan)
-    trade_id_col = np.full(n, np.nan)
-    stop_loss_col = np.full(n, np.nan)
-    take_profit_col = np.full(n, np.nan)
+    open_arr = df["open"].to_numpy(dtype=float)
+    high_arr = df["high"].to_numpy(dtype=float)
+    low_arr = df["low"].to_numpy(dtype=float)
+    close_arr = df["close"].to_numpy(dtype=float)
+    entry_signal_arr = df["entry_signal"].to_numpy(dtype=np.int8)
+    exit_signal_arr = df["exit_signal"].to_numpy(dtype=np.int8)
+    size_arr = df["size"].to_numpy(dtype=float)
+    stop_loss_arr = df["stop_loss"].to_numpy(dtype=float)
+    take_profit_arr = df["take_profit"].to_numpy(dtype=float)
+    stop_loss_pct_arr = df["stop_loss_pct"].to_numpy(dtype=float)
+    take_profit_pct_arr = df["take_profit_pct"].to_numpy(dtype=float)
+    max_hold_bars_arr = df["max_hold_bars"].to_numpy(dtype=float)
+    max_hold_seconds_arr = df["max_hold_seconds"].to_numpy(dtype=float)
+    ts_arr = df[ts_col].to_numpy()
+
+    position = np.zeros(n, dtype=np.int8)
+    entry_price_col = np.full(n, np.nan, dtype=float)
+    exit_price_col = np.full(n, np.nan, dtype=float)
+    trade_id_col = np.full(n, np.nan, dtype=float)
+    stop_loss_col = np.full(n, np.nan, dtype=float)
+    take_profit_col = np.full(n, np.nan, dtype=float)
     pnl_points_col = np.zeros(n, dtype=float)
     pnl_dollars_col = np.zeros(n, dtype=float)
     reason_col = np.array([""] * n, dtype=object)
 
     trades: list[Trade] = []
 
-    in_pos = False
-    side = 0
-    size = 0.0
-    entry_time = None
-    entry_price = None
-    stop_loss = np.nan
-    take_profit = np.nan
-    max_hold_bars = np.nan
-    bars_held = 0
-    trade_id = 0
-
     symbol_value = df[symbol_col].iloc[0] if symbol_col else None
     symbol_root = _get_symbol_root(symbol_value)
     multiplier = _get_multiplier(symbol_value, contract_specs=contract_specs)
 
-    i = 1
-    while i < n:
-        prev = df.iloc[i - 1]
-        curr = df.iloc[i]
+    in_pos = False
+    side = 0
+    size = 0.0
+    entry_time = None
+    entry_price = np.nan
+    stop_loss = np.nan
+    take_profit = np.nan
+    max_hold_bars = np.nan
+    max_hold_seconds = np.nan
+    bars_held = 0
+    trade_id = 0
+
+    for i in range(1, n):
+        prev_i = i - 1
 
         if not in_pos:
-            signal = int(prev["entry_signal"])
-            if signal != 0 and np.isfinite(curr["open"]):
+            signal = int(entry_signal_arr[prev_i])
+            if signal != 0 and np.isfinite(open_arr[i]):
                 in_pos = True
                 side = 1 if signal > 0 else -1
-                size = float(prev["size"]) if np.isfinite(prev["size"]) else 1.0
-                entry_time = curr[ts_col]
-                entry_price = float(curr["open"])
-
-                raw_stop_loss = float(prev["stop_loss"]) if np.isfinite(prev["stop_loss"]) else np.nan
-                raw_take_profit = float(prev["take_profit"]) if np.isfinite(prev["take_profit"]) else np.nan
-                stop_loss_pct = float(prev["stop_loss_pct"]) if np.isfinite(prev["stop_loss_pct"]) else np.nan
-                take_profit_pct = float(prev["take_profit_pct"]) if np.isfinite(prev["take_profit_pct"]) else np.nan
+                size = size_arr[prev_i] if np.isfinite(size_arr[prev_i]) else 1.0
+                entry_time = pd.Timestamp(ts_arr[i])
+                entry_price = float(open_arr[i])
 
                 stop_loss, take_profit = _resolve_risk_levels(
                     side=side,
                     entry_price=entry_price,
-                    stop_loss=raw_stop_loss,
-                    take_profit=raw_take_profit,
-                    stop_loss_pct=stop_loss_pct,
-                    take_profit_pct=take_profit_pct,
+                    stop_loss=stop_loss_arr[prev_i],
+                    take_profit=take_profit_arr[prev_i],
+                    stop_loss_pct=stop_loss_pct_arr[prev_i],
+                    take_profit_pct=take_profit_pct_arr[prev_i],
                 )
 
-                max_hold_bars = float(prev["max_hold_bars"]) if np.isfinite(prev["max_hold_bars"]) else np.nan
+                max_hold_bars = max_hold_bars_arr[prev_i]
+                max_hold_seconds = max_hold_seconds_arr[prev_i]
                 bars_held = 0
                 trade_id += 1
 
@@ -293,11 +300,6 @@ def _run_single_symbol(
                 trade_id_col[i] = trade_id
                 stop_loss_col[i] = stop_loss
                 take_profit_col[i] = take_profit
-
-                i += 1
-                continue
-
-            i += 1
             continue
 
         bars_held += 1
@@ -309,39 +311,45 @@ def _run_single_symbol(
 
         px, reason = _exit_price_for_bar(
             side=side,
-            bar_high=float(curr["high"]),
-            bar_low=float(curr["low"]),
+            bar_high=float(high_arr[i]),
+            bar_low=float(low_arr[i]),
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
 
         if px is None:
-            exit_signal = int(prev["exit_signal"])
-            reverse_signal = int(prev["entry_signal"]) == -side
-            time_exit = np.isfinite(max_hold_bars) and bars_held >= int(max_hold_bars)
+            reverse_signal = int(entry_signal_arr[prev_i]) == -side
+            explicit_exit = int(exit_signal_arr[prev_i]) != 0
 
-            if exit_signal != 0:
-                px = float(curr["open"])
+            time_exit_bars = np.isfinite(max_hold_bars) and bars_held >= int(max_hold_bars)
+            if np.isfinite(max_hold_seconds):
+                elapsed_seconds = (pd.Timestamp(ts_arr[i]) - entry_time).total_seconds()
+                time_exit_seconds = elapsed_seconds >= float(max_hold_seconds)
+            else:
+                time_exit_seconds = False
+
+            time_exit = time_exit_bars or time_exit_seconds
+
+            if explicit_exit:
+                px = float(open_arr[i])
                 reason = "exit_signal"
             elif reverse_signal:
-                px = float(curr["open"])
+                px = float(open_arr[i])
                 reason = "reverse_signal"
             elif time_exit:
-                px = float(curr["close"])
+                px = float(close_arr[i])
                 reason = "time_exit"
 
         if px is not None:
-            exit_time = curr[ts_col]
+            exit_time = pd.Timestamp(ts_arr[i])
             exit_price = float(px)
 
             pnl_points = side * size * (exit_price - entry_price)
             pnl_dollars = side * size * multiplier * (exit_price - entry_price)
-
-            commission_per_side = 0.75
-            pnl_dollars -= 2 * commission_per_side
+            pnl_dollars -= 2.0 * commission_per_side
 
             ret = side * (exit_price / entry_price - 1.0) if entry_price != 0 else np.nan
-            notional_entry = abs(size * multiplier * entry_price) if entry_price is not None else np.nan
+            notional_entry = abs(size * multiplier * entry_price) if entry_price != 0 else np.nan
             ret_notional = pnl_dollars / notional_entry if np.isfinite(notional_entry) and notional_entry != 0 else np.nan
 
             exit_price_col[i] = exit_price
@@ -376,13 +384,12 @@ def _run_single_symbol(
             side = 0
             size = 0.0
             entry_time = None
-            entry_price = None
+            entry_price = np.nan
             stop_loss = np.nan
             take_profit = np.nan
             max_hold_bars = np.nan
+            max_hold_seconds = np.nan
             bars_held = 0
-
-        i += 1
 
     out = df.copy()
     out["position"] = position
@@ -395,8 +402,9 @@ def _run_single_symbol(
     out["trade_pnl_dollars"] = pnl_dollars_col
     out["trade_exit_reason"] = reason_col
 
-    close_ret = out["close"].pct_change().fillna(0.0)
-    out["strategy_ret"] = out["position"].shift(1).fillna(0) * close_ret
+    close_ret = pd.Series(close_arr, index=out.index).pct_change().fillna(0.0).to_numpy(dtype=float)
+    out["strategy_ret"] = pd.Series(np.roll(position, 1), index=out.index).fillna(0).astype(float)
+    out["strategy_ret"] = out["strategy_ret"] * close_ret
     out["equity_curve"] = (1.0 + out["strategy_ret"]).cumprod()
 
     trades_df = pd.DataFrame([t.__dict__ for t in trades])
@@ -409,11 +417,18 @@ def run_backtest(
     ts_col: Optional[str] = None,
     symbol_col: Optional[str] = None,
     contract_specs: Optional[dict] = None,
+    commission_per_side: float = 0.75,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     df, ts_col, symbol_col = _prepare_df(df, ts_col=ts_col, symbol_col=symbol_col)
 
     if symbol_col is None:
-        return _run_single_symbol(df, ts_col=ts_col, symbol_col=None, contract_specs=contract_specs)
+        return _run_single_symbol(
+            df,
+            ts_col=ts_col,
+            symbol_col=None,
+            contract_specs=contract_specs,
+            commission_per_side=commission_per_side,
+        )
 
     bars_out = []
     trades_out = []
@@ -424,6 +439,7 @@ def run_backtest(
             ts_col=ts_col,
             symbol_col=symbol_col,
             contract_specs=contract_specs,
+            commission_per_side=commission_per_side,
         )
         bars_out.append(bars_g)
         if not trades_g.empty:
