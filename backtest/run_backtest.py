@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import gc
 import pandas as pd
@@ -23,8 +23,8 @@ class BacktestSpec:
     name: str
     strategy_fn: StrategyFn
     strategy_kwargs: Dict[str, Any]
-    feature_family: str
-    group: str
+    feature_family: str = "regular"
+    group: str = "core"
     print_head: bool = True
 
 
@@ -35,7 +35,6 @@ def get_dataset_config(dataset_name: str) -> Dict[str, Any]:
             "symbols_prefix": "M6E",
             "start": "2025-01-01",
             "end": "2026-03-01",
-            "default_group": "regular",
             "bar_seconds": 1,
         },
         "micro_sp_futures": {
@@ -43,15 +42,12 @@ def get_dataset_config(dataset_name: str) -> Dict[str, Any]:
             "symbols_prefix": "MES",
             "start": "2022-03-27",
             "end": "2026-03-01",
-            "default_group": "all",
             "bar_seconds": 60,
         },
     }
-
     if dataset_name not in configs:
         valid = ", ".join(configs.keys())
         raise ValueError(f"Unknown dataset_name '{dataset_name}'. Valid options: {valid}")
-
     return configs[dataset_name]
 
 
@@ -95,8 +91,8 @@ def build_features_for_family(raw: pd.DataFrame, family: str, bar_seconds: int) 
             add_momentum=True,
             add_volatility=True,
             add_volume=True,
-            add_session_levels=False,
-            add_opening_ranges=False,
+            add_session_levels=True,
+            add_opening_ranges=True,
             add_rolling_ranges=True,
             add_fvg=False,
             shift_features=True,
@@ -112,7 +108,7 @@ def build_features_for_family(raw: pd.DataFrame, family: str, bar_seconds: int) 
             add_volatility=True,
             add_volume=True,
             add_session_levels=True,
-            add_opening_ranges=False,
+            add_opening_ranges=True,
             add_rolling_ranges=True,
             add_fvg=False,
             shift_features=True,
@@ -164,16 +160,13 @@ def run_single_backtest(
     del plan
     del trades
     gc.collect()
-
     return out
 
 
 def summarize_results(results: List[Dict[str, Any]]) -> pd.DataFrame:
     rows = []
-
     for result in results:
         metrics = result["metrics"] or {}
-
         rows.append(
             {
                 "name": result["name"],
@@ -207,284 +200,239 @@ def summarize_results(results: List[Dict[str, Any]]) -> pd.DataFrame:
         print("No results.")
     else:
         print(summary.to_string(index=False))
-
     return summary
 
 
-def build_regular_experiments(dataset_name: str) -> List[BacktestSpec]:
-    if dataset_name == "micro_sp_futures":
-        return [
-            BacktestSpec(
-                name="ema600_adx50_high_conviction",
-                strategy_fn=bt.ema_adx_mean_reversion,
-                feature_family="regular",
-                group="regular",
-                strategy_kwargs={
-                    "z_col": "price_vs_ema600",
-                    "adx_col": "adx_50",
-                    "long_threshold": -0.0065,
-                    "short_threshold": 0.0065,
-                    "adx_max": 18.0,
-                    "stop_loss_pct": 0.0032,
-                    "take_profit_pct": 0.0058,
-                    "max_hold_seconds": 14400.0,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="bb_long_higher_conviction",
-                strategy_fn=bt.bollinger_exhaustion_reversal_long,
-                feature_family="regular",
-                group="regular",
-                strategy_kwargs={
-                    "bb_col": "bb_pos",
-                    "adx_col": "adx_50",
-                    "resistance_col": "rolling_high_4h",
-                    "support_col": "rolling_low_4h",
-                    "upper_threshold": 0.992,
-                    "lower_threshold": 0.008,
-                    "adx_max": 18.0,
-                    "level_tolerance": 0.0010,
-                    "stop_loss_pct": 0.0030,
-                    "take_profit_pct": 0.0054,
-                    "max_hold_seconds": 12600.0,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="macd_signal_cross_trend_core",
-                strategy_fn=bt.macd_signal_cross_trend,
-                feature_family="regular",
-                group="macd",
-                strategy_kwargs={
-                    "macd_cross_up_col": "macd_cross_up",
-                    "macd_cross_down_col": "macd_cross_down",
-                    "trend_up_col": "ema100_gt_ema300",
-                    "trend_down_col": "ema100_lt_ema300",
-                    "stop_loss_pct": 0.0028,
-                    "take_profit_pct": 0.0055,
-                    "max_hold_seconds": 7200.0,
-                    "exit_on_opposite_cross": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="macd_rsi_confirmation_core",
-                strategy_fn=bt.macd_rsi_confirmation,
-                feature_family="regular",
-                group="macd",
-                strategy_kwargs={
-                    "macd_cross_up_col": "macd_cross_up",
-                    "macd_cross_down_col": "macd_cross_down",
-                    "rsi_col": "rsi_50",
-                    "long_rsi_max": 52.0,
-                    "short_rsi_min": 48.0,
-                    "stop_loss_pct": 0.0025,
-                    "take_profit_pct": 0.0048,
-                    "max_hold_seconds": 5400.0,
-                    "exit_on_opposite_cross": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="macd_hist_reversal_core",
-                strategy_fn=bt.macd_hist_reversal,
-                feature_family="regular",
-                group="macd",
-                strategy_kwargs={
-                    "macd_hist_norm_col": "macd_hist_atr_norm",
-                    "macd_hist_slope_col": "macd_hist_slope",
-                    "long_threshold": -0.12,
-                    "short_threshold": 0.12,
-                    "stop_loss_pct": 0.0025,
-                    "take_profit_pct": 0.0048,
-                    "max_hold_seconds": 7200.0,
-                    "exit_at_zero": True,
-                    "size": 1.0,
-                },
-            ),
-        ]
+def build_strategy_library(dataset_name: str) -> List[BacktestSpec]:
+    opening_gate = bt.EntryGate(
+        trade_start="09:30",
+        trade_end="11:30",
+        cooldown_bars=180 if dataset_name == "micro_currency_futures" else 3,
+        max_trades_per_day=2,
+    )
+    balanced_gate = bt.EntryGate(
+        trade_start=None,
+        trade_end=None,
+        cooldown_bars=300 if dataset_name == "micro_currency_futures" else 5,
+        max_trades_per_day=2,
+    )
+    one_trade_open_gate = bt.EntryGate(
+        trade_start="09:30",
+        trade_end="11:30",
+        cooldown_bars=180 if dataset_name == "micro_currency_futures" else 8,
+        max_trades_per_day=1,
+    )
+
+    macd_tp = bt.TradeParams(
+        stop_loss_pct=0.0025,
+        take_profit_pct=0.0048,
+        max_hold_seconds=5400.0,
+        size=1.0,
+    )
+    meanrev_tp = bt.TradeParams(
+        stop_loss_pct=0.0018,
+        take_profit_pct=0.0038,
+        max_hold_seconds=3600.0,
+        size=1.0,
+    )
+    breakout_tp = bt.TradeParams(
+        stop_loss_pct=0.0022,
+        take_profit_pct=0.0055,
+        max_hold_seconds=5400.0,
+        size=1.0,
+    )
+    momentum_tp = bt.TradeParams(
+        stop_loss_pct=0.0020,
+        take_profit_pct=0.0045,
+        max_hold_seconds=3600.0,
+        size=1.0,
+    )
+    high_conviction_tp = bt.TradeParams(
+        stop_loss_pct=0.0032,
+        take_profit_pct=0.0058,
+        max_hold_seconds=14400.0,
+        size=1.0,
+    )
 
     return [
         BacktestSpec(
             name="ema600_adx50_high_conviction",
-            strategy_fn=bt.ema_adx_mean_reversion,
-            feature_family="regular",
-            group="regular",
+            strategy_fn=bt.ema600_adx50_high_conviction,
+            group="baseline",
             strategy_kwargs={
-                "z_col": "price_vs_ema600",
-                "adx_col": "adx_50",
-                "long_threshold": -0.0065,
-                "short_threshold": 0.0065,
-                "adx_max": 18.0,
-                "stop_loss_pct": 0.0032,
-                "take_profit_pct": 0.0058,
-                "max_hold_seconds": 14400.0,
-                "size": 1.0,
+                "trade_params": high_conviction_tp,
+                "gate": balanced_gate,
             },
         ),
-    ]
-
-
-def build_fib_experiments(dataset_name: str) -> List[BacktestSpec]:
-    if dataset_name == "micro_sp_futures":
-        return [
-            BacktestSpec(
-                name="fib_4h_rsi_active",
-                strategy_fn=bt.fib_trend_retracement_rsi,
-                feature_family="fib",
-                group="fib",
-                strategy_kwargs={
-                    "trend_up_col": "ema100_gt_ema300",
-                    "trend_down_col": "ema100_lt_ema300",
-                    "fib_prefix": "fib_4h",
-                    "range_col": "trend_range_4h",
-                    "range_min": 0.0035,
-                    "rsi_col": "rsi_50",
-                    "long_rsi_max": 55.0,
-                    "short_rsi_min": 45.0,
-                    "stop_loss_pct": 0.0030,
-                    "take_profit_pct": 0.0055,
-                    "max_hold_seconds": 21600.0,
-                    "exit_on_midpoint": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="fib_4h_rsi_balanced",
-                strategy_fn=bt.fib_trend_retracement_rsi,
-                feature_family="fib",
-                group="fib",
-                strategy_kwargs={
-                    "trend_up_col": "ema100_gt_ema300",
-                    "trend_down_col": "ema100_lt_ema300",
-                    "fib_prefix": "fib_4h",
-                    "range_col": "trend_range_4h",
-                    "range_min": 0.0045,
-                    "rsi_col": "rsi_50",
-                    "long_rsi_max": 52.0,
-                    "short_rsi_min": 48.0,
-                    "stop_loss_pct": 0.0030,
-                    "take_profit_pct": 0.0058,
-                    "max_hold_seconds": 21600.0,
-                    "exit_on_midpoint": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="fib_8h_structure_active",
-                strategy_fn=bt.fib_trend_retracement_structure,
-                feature_family="fib",
-                group="fib",
-                strategy_kwargs={
-                    "trend_up_col": "ema100_gt_ema300",
-                    "trend_down_col": "ema100_lt_ema300",
-                    "fib_prefix": "fib_8h",
-                    "range_col": "trend_range_8h",
-                    "range_min": 0.0045,
-                    "support_col": "prev_session_low",
-                    "resistance_col": "prev_session_high",
-                    "level_tolerance": 0.0025,
-                    "stop_loss_pct": 0.0030,
-                    "take_profit_pct": 0.0060,
-                    "max_hold_seconds": 28800.0,
-                    "exit_on_midpoint": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="fib_1d_day_active",
-                strategy_fn=bt.fib_trend_retracement_day,
-                feature_family="fib",
-                group="fib",
-                strategy_kwargs={
-                    "trend_up_col": "ema300_gt_ema600",
-                    "trend_down_col": "ema300_lt_ema600",
-                    "fib_prefix": "fib_1d",
-                    "range_col": "trend_range_1d",
-                    "range_min": 0.0065,
-                    "adx_col": "adx_50",
-                    "adx_min": 18.0,
-                    "stop_loss_pct": 0.0035,
-                    "take_profit_pct": 0.0065,
-                    "max_hold_seconds": 43200.0,
-                    "exit_on_midpoint": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="macd_fib_4h_confirmation",
-                strategy_fn=bt.macd_fib_retracement_confirmation,
-                feature_family="fib",
-                group="macd_fib",
-                strategy_kwargs={
-                    "macd_hist_slope_col": "macd_hist_slope",
-                    "fib_zone_col": "fib_4h_in_fib_zone_500_618",
-                    "trend_up_col": "ema100_gt_ema300",
-                    "trend_down_col": "ema100_lt_ema300",
-                    "stop_loss_pct": 0.0030,
-                    "take_profit_pct": 0.0060,
-                    "max_hold_seconds": 21600.0,
-                    "exit_on_slope_flip": True,
-                    "size": 1.0,
-                },
-            ),
-            BacktestSpec(
-                name="macd_fib_8h_confirmation",
-                strategy_fn=bt.macd_fib_retracement_confirmation,
-                feature_family="fib",
-                group="macd_fib",
-                strategy_kwargs={
-                    "macd_hist_slope_col": "macd_hist_slope",
-                    "fib_zone_col": "fib_8h_in_fib_zone_500_618",
-                    "trend_up_col": "ema100_gt_ema300",
-                    "trend_down_col": "ema100_lt_ema300",
-                    "stop_loss_pct": 0.0032,
-                    "take_profit_pct": 0.0062,
-                    "max_hold_seconds": 28800.0,
-                    "exit_on_slope_flip": True,
-                    "size": 1.0,
-                },
-            ),
-        ]
-
-    return [
         BacktestSpec(
-            name="fib_4h_rsi_active",
-            strategy_fn=bt.fib_trend_retracement_rsi,
-            feature_family="fib",
-            group="fib",
+            name="macd_ema_rsi_confluence_opening_window",
+            strategy_fn=bt.confluence_strategy,
+            group="baseline",
             strategy_kwargs={
+                "long_conditions": [
+                    bt.col_eq("macd_cross_up", 1),
+                    bt.col_eq("ema100_gt_ema300", 1),
+                    bt.col_lte("rsi_50", 55.0),
+                    bt.abs_col_gte("macd_hist_atr_norm", 0.08),
+                ],
+                "short_conditions": [
+                    bt.col_eq("macd_cross_down", 1),
+                    bt.col_eq("ema100_lt_ema300", 1),
+                    bt.col_gte("rsi_50", 45.0),
+                    bt.abs_col_gte("macd_hist_atr_norm", 0.08),
+                ],
+                "trade_params": macd_tp,
+                "gate": opening_gate,
+            },
+        ),
+        BacktestSpec(
+            name="opening_range_breakout_15m",
+            strategy_fn=bt.opening_range_breakout,
+            group="breakout",
+            strategy_kwargs={
+                "opening_range_minutes": 15,
+                "breakout_buffer_pct": 0.00025,
+                "confirm_trend": True,
+                "confirm_vwap": True,
+                "confirm_adx_min": 18.0,
+                "trade_params": breakout_tp,
+                "gate": one_trade_open_gate,
+            },
+        ),
+        BacktestSpec(
+            name="opening_range_breakout_30m",
+            strategy_fn=bt.opening_range_breakout,
+            group="breakout",
+            strategy_kwargs={
+                "opening_range_minutes": 30,
+                "breakout_buffer_pct": 0.00025,
+                "confirm_trend": True,
+                "confirm_vwap": True,
+                "confirm_adx_min": 18.0,
+                "trade_params": breakout_tp,
+                "gate": one_trade_open_gate,
+            },
+        ),
+        BacktestSpec(
+            name="opening_range_breakout_retest_30m",
+            strategy_fn=bt.opening_range_breakout_retest,
+            group="breakout",
+            strategy_kwargs={
+                "opening_range_minutes": 30,
+                "retest_tolerance_pct": 0.0008,
+                "confirm_trend": True,
+                "confirm_adx_min": 18.0,
+                "trade_params": breakout_tp,
+                "gate": one_trade_open_gate,
+            },
+        ),
+        BacktestSpec(
+            name="donchian_breakout_adx_opening_window",
+            strategy_fn=bt.donchian_breakout_adx,
+            group="momentum_breakout",
+            strategy_kwargs={
+                "lookback_bars": 60,
+                "adx_min": 20.0,
+                "rel_volume_min": 1.05,
+                "trade_params": breakout_tp,
+                "gate": one_trade_open_gate,
+            },
+        ),
+        BacktestSpec(
+            name="ema_slope_momentum_pullback_opening_window",
+            strategy_fn=bt.ema_slope_momentum_pullback,
+            group="momentum_pullback",
+            strategy_kwargs={
+                "pullback_to_ema": "ema20",
+                "trend_fast_col": "ema50",
+                "trend_slow_col": "ema200",
+                "slope_ema_col": "ema50",
+                "slope_lookback": 10,
+                "slope_min_pct": 0.00035,
+                "rsi_long_min": 52.0,
+                "rsi_short_max": 48.0,
+                "adx_min": 16.0,
+                "pullback_tolerance_pct": 0.0009,
+                "trade_params": momentum_tp,
+                "gate": opening_gate,
+            },
+        ),
+        BacktestSpec(
+            name="vwap_trend_pullback_opening_window",
+            strategy_fn=bt.vwap_trend_pullback,
+            group="momentum_pullback",
+            strategy_kwargs={
+                "trend_fast_col": "ema50",
+                "trend_slow_col": "ema200",
+                "rsi_long_min": 52.0,
+                "rsi_short_max": 48.0,
+                "adx_min": 16.0,
+                "vwap_tolerance_pct": 0.0009,
+                "trade_params": momentum_tp,
+                "gate": opening_gate,
+            },
+        ),
+        BacktestSpec(
+            name="macd_trend_opening_window",
+            strategy_fn=bt.macd_signal_cross_trend,
+            group="legacy_compare",
+            strategy_kwargs={
+                "macd_cross_up_col": "macd_cross_up",
+                "macd_cross_down_col": "macd_cross_down",
                 "trend_up_col": "ema100_gt_ema300",
                 "trend_down_col": "ema100_lt_ema300",
+                "stop_loss_pct": 0.0025,
+                "take_profit_pct": 0.0048,
+                "max_hold_seconds": 5400.0,
+                "trade_start": opening_gate.trade_start,
+                "trade_end": opening_gate.trade_end,
+                "cooldown_bars": opening_gate.cooldown_bars,
+                "max_trades_per_day": opening_gate.max_trades_per_day,
+            },
+        ),
+        BacktestSpec(
+            name="ema_rsi_mean_reversion_opening_window",
+            strategy_fn=bt.confluence_strategy,
+            group="legacy_compare",
+            strategy_kwargs={
+                "long_conditions": [
+                    bt.crossed_below("price_vs_ema80", -0.0018),
+                    bt.crossed_below("rsi_14", 32.0),
+                    bt.col_lte("adx_14", 22.0),
+                ],
+                "short_conditions": [
+                    bt.crossed_above("price_vs_ema80", 0.0018),
+                    bt.crossed_above("rsi_14", 68.0),
+                    bt.col_lte("adx_14", 22.0),
+                ],
+                "trade_params": meanrev_tp,
+                "gate": opening_gate,
+            },
+        ),
+        BacktestSpec(
+            name="fib_rsi_trend_opening_window",
+            strategy_fn=bt.fib_trend_retracement_rsi,
+            feature_family="fib",
+            group="legacy_compare",
+            strategy_kwargs={
                 "fib_prefix": "fib_4h",
+                "trend_up_col": "ema100_gt_ema300",
+                "trend_down_col": "ema100_lt_ema300",
                 "range_col": "trend_range_4h",
-                "range_min": 0.0060,
+                "range_min": 0.0045,
                 "rsi_col": "rsi_50",
-                "long_rsi_max": 48.0,
-                "short_rsi_min": 52.0,
-                "stop_loss_pct": 0.0032,
-                "take_profit_pct": 0.0058,
+                "long_rsi_max": 55.0,
+                "short_rsi_min": 45.0,
+                "stop_loss_pct": 0.0030,
+                "take_profit_pct": 0.0060,
                 "max_hold_seconds": 21600.0,
-                "exit_on_midpoint": True,
-                "size": 1.0,
+                "trade_start": opening_gate.trade_start,
+                "trade_end": opening_gate.trade_end,
+                "cooldown_bars": opening_gate.cooldown_bars,
+                "max_trades_per_day": opening_gate.max_trades_per_day,
             },
         ),
     ]
-
-
-def build_experiments(group: str, dataset_name: str) -> List[BacktestSpec]:
-    regular = build_regular_experiments(dataset_name)
-    fib = build_fib_experiments(dataset_name)
-
-    if group == "regular":
-        return regular
-    if group == "fib":
-        return fib
-    if group == "all":
-        return regular + fib
-
-    raise ValueError(f"Unknown group: {group}")
 
 
 def filter_experiments(
@@ -494,17 +442,13 @@ def filter_experiments(
     names: Optional[list[str]] = None,
 ) -> List[BacktestSpec]:
     out = experiments
-
     if feature_family is not None:
         out = [x for x in out if x.feature_family == feature_family]
-
     if group is not None:
         out = [x for x in out if x.group == group]
-
     if names is not None:
         wanted = set(names)
         out = [x for x in out if x.name in wanted]
-
     return out
 
 
@@ -516,8 +460,7 @@ def run_full_sample_suite(
     results = []
     for spec in experiments:
         feat = feat_map[spec.feature_family]
-        result = run_single_backtest(feat, spec, initial_capital=initial_capital)
-        results.append(result)
+        results.append(run_single_backtest(feat, spec, initial_capital=initial_capital))
     summary = summarize_results(results)
     return results, summary
 
@@ -529,7 +472,6 @@ def main():
     dataset_name = "micro_sp_futures"
 
     cfg = get_dataset_config(dataset_name)
-
     raw = load_raw_data(
         dataset=cfg["dataset"],
         symbols_prefix=cfg["symbols_prefix"],
@@ -538,15 +480,14 @@ def main():
         end=cfg["end"],
     )
 
-    group_to_run = "all"
-    experiments = build_experiments(group=group_to_run, dataset_name=dataset_name)
+    experiments = build_strategy_library(dataset_name)
 
     # examples:
-    # experiments = filter_experiments(experiments, group="fib")
-    # experiments = filter_experiments(experiments, names=["fib_4h_rsi_active", "macd_signal_cross_trend_core"])
+    # experiments = filter_experiments(experiments, group="breakout")
+    # experiments = filter_experiments(experiments, group="momentum_pullback")
+    # experiments = filter_experiments(experiments, names=["opening_range_breakout_30m"])
 
     feat_map = prepare_feature_sets(raw, experiments, bar_seconds=cfg["bar_seconds"])
-
     _, full_summary = run_full_sample_suite(
         feat_map=feat_map,
         experiments=experiments,

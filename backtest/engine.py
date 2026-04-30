@@ -10,15 +10,15 @@ import pandas as pd
 REQUIRED_PRICE_COLUMNS = ["open", "high", "low", "close"]
 
 CONTRACT_SPECS = {
-    "M6E": {"multiplier": 12500.0},
-    "M6B": {"multiplier": 6250.0},
-    "M6A": {"multiplier": 10000.0},
-    "M6C": {"multiplier": 10000.0},
-    "M6J": {"multiplier": 1250000.0},
-    "M6S": {"multiplier": 12500.0},
-    "MJY": {"multiplier": 1250000.0},
-    "MNH": {"multiplier": 10000.0},
-    "MES": {"multiplier": 5.0}
+    "M6E": {"multiplier": 12500.0, "tick_size": 0.00005, "tick_value": 0.625},
+    "M6B": {"multiplier": 6250.0, "tick_size": 0.0001, "tick_value": 0.625},
+    "M6A": {"multiplier": 10000.0, "tick_size": 0.0001, "tick_value": 1.0},
+    "M6C": {"multiplier": 10000.0, "tick_size": 0.0001, "tick_value": 1.0},
+    "M6J": {"multiplier": 1250000.0, "tick_size": 0.0000005, "tick_value": 0.625},
+    "M6S": {"multiplier": 12500.0, "tick_size": 0.0001, "tick_value": 1.25},
+    "MJY": {"multiplier": 1250000.0, "tick_size": 0.0000005, "tick_value": 0.625},
+    "MNH": {"multiplier": 10000.0, "tick_size": 0.0001, "tick_value": 1.0},
+    "MES": {"multiplier": 5.0, "tick_size": 0.25, "tick_value": 1.25},
 }
 
 
@@ -36,10 +36,18 @@ class Trade:
     notional_entry: float
     bars_held: int
     reason: str
+    setup: str
+    session_name: str
     stop_loss: float
     take_profit: float
+    tick_size: float
+    tick_value: float
+    slippage_ticks: float
+    risk_points: float
     pnl_points: float
+    pnl_ticks: float
     pnl_dollars: float
+    pnl_r: float
     ret: float
     ret_notional: float
 
@@ -89,6 +97,12 @@ def _prepare_df(
         "max_hold_bars": np.nan,
         "max_hold_seconds": np.nan,
         "size": 1.0,
+        "setup": "",
+        "session_name": "",
+        "flatten_eod": 0,
+        "slippage_ticks": 0.0,
+        "tick_size": np.nan,
+        "tick_value": np.nan,
     }
     for col, default_val in default_cols.items():
         if col not in out.columns:
@@ -97,6 +111,7 @@ def _prepare_df(
     out["entry_signal"] = pd.to_numeric(out["entry_signal"], errors="coerce").fillna(0).astype(np.int8)
     out["exit_signal"] = pd.to_numeric(out["exit_signal"], errors="coerce").fillna(0).astype(np.int8)
     out["size"] = pd.to_numeric(out["size"], errors="coerce").fillna(1.0)
+    out["flatten_eod"] = pd.to_numeric(out["flatten_eod"], errors="coerce").fillna(0).astype(np.int8)
 
     numeric_cols = [
         "open",
@@ -109,6 +124,9 @@ def _prepare_df(
         "take_profit_pct",
         "max_hold_bars",
         "max_hold_seconds",
+        "slippage_ticks",
+        "tick_size",
+        "tick_value",
     ]
     for col in numeric_cols:
         out[col] = pd.to_numeric(out[col], errors="coerce")
@@ -130,6 +148,24 @@ def _get_multiplier(symbol: Optional[str], contract_specs: Optional[dict] = None
     if root is None:
         return 1.0
     return float(contract_specs.get(root, {}).get("multiplier", 1.0))
+
+
+def _get_tick_size(symbol: Optional[str], contract_specs: Optional[dict] = None) -> float:
+    if contract_specs is None:
+        contract_specs = CONTRACT_SPECS
+    root = _get_symbol_root(symbol)
+    if root is None:
+        return np.nan
+    return float(contract_specs.get(root, {}).get("tick_size", np.nan))
+
+
+def _get_tick_value(symbol: Optional[str], contract_specs: Optional[dict] = None) -> float:
+    if contract_specs is None:
+        contract_specs = CONTRACT_SPECS
+    root = _get_symbol_root(symbol)
+    if root is None:
+        return np.nan
+    return float(contract_specs.get(root, {}).get("tick_value", np.nan))
 
 
 def _absolute_levels_from_pct(side: int, entry_price: float, stop_loss_pct: float, take_profit_pct: float):
@@ -218,6 +254,22 @@ def _exit_price_for_bar(side: int, bar_high: float, bar_low: float, stop_loss: f
     return None, None
 
 
+def _apply_slippage(price: float, side: int, is_entry: bool, slippage_ticks: float, tick_size: float) -> float:
+    if not np.isfinite(price) or not np.isfinite(slippage_ticks) or not np.isfinite(tick_size):
+        return price
+    points = slippage_ticks * tick_size
+    if is_entry:
+        return price + points if side == 1 else price - points
+    return price - points if side == 1 else price + points
+
+
+def _ny_day(ts_value) -> pd.Timestamp:
+    ts = pd.Timestamp(ts_value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.tz_convert("America/New_York").floor("D")
+
+
 def _run_single_symbol(
     df: pd.DataFrame,
     ts_col: str,
@@ -240,6 +292,10 @@ def _run_single_symbol(
     take_profit_pct_arr = df["take_profit_pct"].to_numpy(dtype=float)
     max_hold_bars_arr = df["max_hold_bars"].to_numpy(dtype=float)
     max_hold_seconds_arr = df["max_hold_seconds"].to_numpy(dtype=float)
+    slippage_ticks_arr = df["slippage_ticks"].to_numpy(dtype=float)
+    tick_size_arr = df["tick_size"].to_numpy(dtype=float)
+    tick_value_arr = df["tick_value"].to_numpy(dtype=float)
+    flatten_eod_arr = df["flatten_eod"].to_numpy(dtype=np.int8)
     ts_arr = df[ts_col].to_numpy()
 
     position = np.zeros(n, dtype=np.int8)
@@ -257,6 +313,8 @@ def _run_single_symbol(
     symbol_value = df[symbol_col].iloc[0] if symbol_col else None
     symbol_root = _get_symbol_root(symbol_value)
     multiplier = _get_multiplier(symbol_value, contract_specs=contract_specs)
+    default_tick_size = _get_tick_size(symbol_value, contract_specs=contract_specs)
+    default_tick_value = _get_tick_value(symbol_value, contract_specs=contract_specs)
 
     in_pos = False
     side = 0
@@ -269,6 +327,11 @@ def _run_single_symbol(
     max_hold_seconds = np.nan
     bars_held = 0
     trade_id = 0
+    setup = ""
+    session_name = ""
+    slippage_ticks = 0.0
+    tick_size = default_tick_size
+    tick_value = default_tick_value
 
     for i in range(1, n):
         prev_i = i - 1
@@ -280,7 +343,18 @@ def _run_single_symbol(
                 side = 1 if signal > 0 else -1
                 size = size_arr[prev_i] if np.isfinite(size_arr[prev_i]) else 1.0
                 entry_time = pd.Timestamp(ts_arr[i])
-                entry_price = float(open_arr[i])
+                setup = str(df["setup"].iloc[prev_i]) if "setup" in df.columns else ""
+                session_name = str(df["session_name"].iloc[prev_i]) if "session_name" in df.columns else ""
+                slippage_ticks = slippage_ticks_arr[prev_i] if np.isfinite(slippage_ticks_arr[prev_i]) else 0.0
+                tick_size = tick_size_arr[prev_i] if np.isfinite(tick_size_arr[prev_i]) else default_tick_size
+                tick_value = tick_value_arr[prev_i] if np.isfinite(tick_value_arr[prev_i]) else default_tick_value
+                entry_price = _apply_slippage(
+                    float(open_arr[i]),
+                    side=side,
+                    is_entry=True,
+                    slippage_ticks=slippage_ticks,
+                    tick_size=tick_size,
+                )
 
                 stop_loss, take_profit = _resolve_risk_levels(
                     side=side,
@@ -340,14 +414,32 @@ def _run_single_symbol(
             elif time_exit:
                 px = float(close_arr[i])
                 reason = "time_exit"
+            elif flatten_eod_arr[i]:
+                next_day = _ny_day(ts_arr[i + 1]) if i + 1 < n else None
+                this_day = _ny_day(ts_arr[i])
+                if next_day is None or next_day != this_day:
+                    px = float(close_arr[i])
+                    reason = "end_of_day"
 
         if px is not None:
             exit_time = pd.Timestamp(ts_arr[i])
-            exit_price = float(px)
+            exit_price = _apply_slippage(
+                float(px),
+                side=side,
+                is_entry=False,
+                slippage_ticks=slippage_ticks,
+                tick_size=tick_size,
+            )
 
             pnl_points = side * size * (exit_price - entry_price)
-            pnl_dollars = side * size * multiplier * (exit_price - entry_price)
+            pnl_ticks = side * size * (exit_price - entry_price) / tick_size if np.isfinite(tick_size) and tick_size != 0 else np.nan
+            if np.isfinite(tick_value) and np.isfinite(pnl_ticks):
+                pnl_dollars = pnl_ticks * tick_value
+            else:
+                pnl_dollars = side * size * multiplier * (exit_price - entry_price)
             pnl_dollars -= 2.0 * commission_per_side
+            risk_points = abs(entry_price - stop_loss) if np.isfinite(stop_loss) else np.nan
+            pnl_r = side * (exit_price - entry_price) / risk_points if np.isfinite(risk_points) and risk_points != 0 else np.nan
 
             ret = side * (exit_price / entry_price - 1.0) if entry_price != 0 else np.nan
             notional_entry = abs(size * multiplier * entry_price) if entry_price != 0 else np.nan
@@ -372,10 +464,18 @@ def _run_single_symbol(
                     notional_entry=notional_entry,
                     bars_held=bars_held,
                     reason=reason,
+                    setup=setup,
+                    session_name=session_name,
                     stop_loss=stop_loss,
                     take_profit=take_profit,
+                    tick_size=tick_size,
+                    tick_value=tick_value,
+                    slippage_ticks=slippage_ticks,
+                    risk_points=risk_points,
                     pnl_points=pnl_points,
+                    pnl_ticks=pnl_ticks,
                     pnl_dollars=pnl_dollars,
+                    pnl_r=pnl_r,
                     ret=ret,
                     ret_notional=ret_notional,
                 )
@@ -391,6 +491,11 @@ def _run_single_symbol(
             max_hold_bars = np.nan
             max_hold_seconds = np.nan
             bars_held = 0
+            setup = ""
+            session_name = ""
+            slippage_ticks = 0.0
+            tick_size = default_tick_size
+            tick_value = default_tick_value
 
     out = df.copy()
     out["position"] = position
@@ -461,10 +566,18 @@ def run_backtest(
             "notional_entry",
             "bars_held",
             "reason",
+            "setup",
+            "session_name",
             "stop_loss",
             "take_profit",
+            "tick_size",
+            "tick_value",
+            "slippage_ticks",
+            "risk_points",
             "pnl_points",
+            "pnl_ticks",
             "pnl_dollars",
+            "pnl_r",
             "ret",
             "ret_notional",
         ]
